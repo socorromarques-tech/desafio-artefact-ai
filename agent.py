@@ -146,7 +146,7 @@ def generate_llm_response(client, system_prompt, policies, context_data, user_qu
     
     try:
         response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",  # Modelo padrão estável
+            model="claude-sonnet-5-5",
             max_tokens=1000,
             system=system_prompt,
             messages=[
