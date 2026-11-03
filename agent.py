@@ -1,17 +1,21 @@
 # agent.py
+# agent.py
 import os
 import sys
-import pandas as pd
 from datetime import datetime
-from anthropic import Anthropic
 
-# Adiciona o diretório atual ao path do Python para garantir importações corretas
+import pandas as pd
+from anthropic import Anthropic
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Adiciona o diretório atual ao path do Python
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from data import carregar_dados
 from prompt_agent import get_agent_prompt
 from store_policies import STORE_POLICIES_TEXT
-
 def initialize_system():
     """Inicializa os dados e exibe o status do agente de atendimento."""
     print("Initializing Artefact Customer Service Agent...")
@@ -146,7 +150,7 @@ def generate_llm_response(client, system_prompt, policies, context_data, user_qu
     
     try:
         response = client.messages.create(
-            model="claude-sonnet-5-5",
+            model=os.getenv("MODEL_NAME", "claude-3-5-sonnet-20241024"),  # Modelo padrão estável
             max_tokens=1000,
             system=system_prompt,
             messages=[
