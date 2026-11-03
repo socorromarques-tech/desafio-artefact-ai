@@ -1,0 +1,4 @@
+﻿anthropic==0.42.0
+pandas==2.2.1
+python-dotenv==1.0.1
+pypdf==4.1.0
