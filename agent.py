@@ -1,21 +1,17 @@
-# agent.py
-# agent.py
 import os
-import sys
 from datetime import datetime
 
+import anthropic
 import pandas as pd
-from anthropic import Anthropic
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Adiciona o diretório atual ao path do Python
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
 from data import carregar_dados
 from prompt_agent import get_agent_prompt
 from store_policies import STORE_POLICIES_TEXT
+
+
 def initialize_system():
     """Inicializa os dados e exibe o status do agente de atendimento."""
     print("Initializing Artefact Customer Service Agent...")
@@ -35,12 +31,10 @@ def initialize_system():
     prompt = get_agent_prompt()
     print("-> Agent prompt successfully loaded and ready for use!")
     
-    # 3. Inicializa o cliente da Anthropic (Modo Fallback ativado)
-    # 3. Inicializa o cliente da Anthropic buscando do ambiente
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     client = None
-    if api_key:
-        client = Anthropic(api_key=api_key)
+    if api_key and api_key != "your_anthropic_api_key_here":
+        client = anthropic.Anthropic(api_key=api_key)
         print("-> Anthropic API Client initialized successfully!")
     else:
         print("-> Warning: ANTHROPIC_API_KEY not found in environment. Running in fallback/mock mode.")
@@ -150,7 +144,7 @@ def generate_llm_response(client, system_prompt, policies, context_data, user_qu
     
     try:
         response = client.messages.create(
-            model=os.getenv("MODEL_NAME", "claude-3-5-sonnet-20241024"),  # Modelo padrão estável
+            model=os.getenv("MODEL_NAME", "claude-sonnet-5-5"),
             max_tokens=1000,
             system=system_prompt,
             messages=[
