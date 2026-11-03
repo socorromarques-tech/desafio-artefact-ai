@@ -10,7 +10,7 @@ load_dotenv()
 
 from data import carregar_dados
 from prompt_agent import get_agent_prompt
-from store_policies import STORE_POLICIES_TEXT
+from store_policies import get_policy_context, load_policy_pages
 
 
 MODEL_NAME = os.getenv("MODEL_NAME", "claude-sonnet-5-5")
@@ -99,9 +99,16 @@ def initialize_system():
         print("Erro ao carregar os dados. Confira os arquivos da pasta data/.")
         return None
 
+    try:
+        policy_pages = load_policy_pages()
+    except (OSError, ValueError) as error:
+        print(f"Erro ao carregar o manual de políticas: {error}")
+        return None
+
     products, orders, customers, categories, order_items, promotions = data
     print(f"-> {len(products)} produtos carregados")
     print(f"-> {len(orders)} pedidos carregados")
+    print(f"-> Manual de políticas carregado ({len(policy_pages)} páginas com texto)")
 
     prompt = get_agent_prompt()
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
@@ -308,7 +315,7 @@ def executar_ferramenta(
             customers_df,
         )
     if name == "consultar_politicas":
-        return STORE_POLICIES_TEXT
+        return get_policy_context(tool_input.get("tema", ""))
     raise ValueError(f"Ferramenta desconhecida solicitada pelo modelo: {name}")
 
 
