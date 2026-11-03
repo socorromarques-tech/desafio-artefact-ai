@@ -1,6 +1,7 @@
 import os
 import re
 import unicodedata
+from datetime import date
 
 import anthropic
 import pandas as pd
@@ -71,6 +72,31 @@ TOOLS = [
         },
     },
     {
+        "name": "verificar_prazo_devolucao",
+        "description": (
+            "Verifica o prazo de arrependimento para uma compra online usando a data "
+            "real de recebimento do pedido. É obrigatório confirmar o e-mail ou telefone "
+            "associado ao pedido. Nunca use a previsão de entrega como data de recebimento."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "order_id": {
+                    "type": "string",
+                    "description": "Identificador do pedido informado pelo cliente.",
+                },
+                "contato_cliente": {
+                    "type": "string",
+                    "description": (
+                        "E-mail ou telefone informado pelo cliente para verificar "
+                        "que é o titular do pedido."
+                    ),
+                },
+            },
+            "required": ["order_id"],
+        },
+    },
+    {
         "name": "consultar_politicas",
         "description": (
             "Consulta as políticas oficiais disponíveis. Use antes de responder "
@@ -105,6 +131,12 @@ def initialize_system():
         print(f"Erro ao carregar o manual de políticas: {error}")
         return None
 
+    try:
+        _get_reference_date()
+    except ValueError as error:
+        print(f"Erro na configuração de data de referência: {error}")
+        return None
+
     products, orders, customers, categories, order_items, promotions = data
     print(f"-> {len(products)} produtos carregados")
     print(f"-> {len(orders)} pedidos carregados")
@@ -129,6 +161,138 @@ def _normalize_text(value):
 
 def _format_brl(value):
     return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _get_reference_date(reference_date=None):
+    if reference_date is not None:
+        return reference_date
+
+    configured_date = os.getenv("REFERENCE_DATE", "").strip()
+    if configured_date:
+        try:
+            return date.fromisoformat(configured_date)
+        except ValueError as error:
+            raise ValueError(
+                "REFERENCE_DATE deve estar no formato YYYY-MM-DD."
+            ) from error
+    return date.today()
+
+
+def _get_verified_order(order_id, contact, orders_df, customers_df):
+    if not contact or not str(contact).strip():
+        return None, (
+            "Para proteger os dados do cliente, solicite o e-mail ou telefone "
+            "associado ao pedido antes de consultá-lo."
+        )
+
+    matching_orders = orders_df[
+        orders_df["order_id"].astype(str).eq(str(order_id))
+    ]
+    if matching_orders.empty:
+        return None, "Não foi possível confirmar o pedido com os dados informados."
+
+    order = matching_orders.iloc[0]
+    customers = customers_df[
+        customers_df["customer_id"].astype(str).eq(str(order["customer_id"]))
+    ]
+    if customers.empty:
+        return None, "Não foi possível confirmar o pedido com os dados informados."
+
+    customer = customers.iloc[0]
+    normalized_contact = str(contact).strip()
+    email_matches = (
+        "@" in normalized_contact
+        and _normalize_text(normalized_contact)
+        == _normalize_text(customer.get("email", ""))
+    )
+    phone_matches = (
+        "@" not in normalized_contact
+        and re.sub(r"\D", "", normalized_contact)
+        == re.sub(r"\D", "", str(customer.get("phone", "")))
+    )
+    if not (email_matches or phone_matches):
+        return None, "Não foi possível confirmar o pedido com os dados informados."
+    return order, None
+
+
+def avaliar_prazo_devolucao(order, reference_date=None):
+    """Avalia somente o prazo de arrependimento, sem presumir data ou canal."""
+    order_status = _normalize_text(order.get("status", ""))
+    if order_status != "delivered":
+        return (
+            "Ainda não é possível avaliar o prazo de devolução: o pedido não está "
+            "marcado como entregue."
+        )
+
+    received_at = next(
+        (
+            order.get(column)
+            for column in ("received_at", "delivered_at", "actual_delivery_date")
+            if order.get(column) is not None and str(order.get(column)).strip()
+        ),
+        None,
+    )
+    channel_value = order.get("purchase_channel", order.get("channel", ""))
+    channel = re.sub(r"[\W_]+", " ", _normalize_text(channel_value)).strip()
+
+    missing_facts = []
+    if received_at is None or pd.isna(received_at):
+        missing_facts.append(
+            "a data real de recebimento (a previsão de entrega não a substitui)"
+        )
+    if not channel:
+        missing_facts.append("o canal da compra")
+    if missing_facts:
+        return (
+            "Não é possível calcular o prazo: faltam "
+            + " e ".join(missing_facts)
+            + " nos dados do pedido."
+        )
+
+    delivery_timestamp = pd.to_datetime(received_at, errors="coerce")
+    if pd.isna(delivery_timestamp):
+        return "Não é possível calcular o prazo: a data real de recebimento é inválida."
+
+    online_channels = {
+        "online",
+        "ecommerce",
+        "e commerce",
+        "online store",
+        "site",
+        "loja virtual",
+        "compra online",
+    }
+    if channel not in online_channels:
+        return (
+            "O manual define o direito de arrependimento de 7 dias para compras "
+            "online, mas este pedido não está registrado como compra online. "
+            "Consulte a política de trocas para avaliar outras condições."
+        )
+
+    delivery_date = delivery_timestamp.date()
+    evaluation_date = _get_reference_date(reference_date)
+    if delivery_date > evaluation_date:
+        return (
+            f"A data real de recebimento ({delivery_date.isoformat()}) é posterior "
+            f"à data de referência ({evaluation_date.isoformat()}); confira os dados."
+        )
+
+    elapsed_days = (evaluation_date - delivery_date).days
+    if elapsed_days <= 7:
+        return (
+            f"O pedido foi recebido em {delivery_date.isoformat()}, há {elapsed_days} "
+            f"dias, considerando {evaluation_date.isoformat()} como data de referência. "
+            "Está dentro do prazo de 7 dias corridos do direito de arrependimento. "
+            "A solicitação ainda depende das condições do manual, incluindo produto "
+            "sem sinais de uso, embalagem original, acessórios e manuais."
+        )
+
+    return (
+        f"O pedido foi recebido em {delivery_date.isoformat()}, há {elapsed_days} "
+        f"dias, considerando {evaluation_date.isoformat()} como data de referência. "
+        "O prazo de 7 dias corridos do direito de arrependimento descrito no manual "
+        "foi ultrapassado. Isso não avalia outros direitos de troca ou garantia."
+    )
 
 
 def buscar_produtos(
@@ -236,38 +400,11 @@ def buscar_produtos(
 
 def consultar_pedido(order_id, contato_cliente, orders_df, customers_df):
     """Consulta pedido somente após verificar o e-mail ou telefone do titular."""
-    if not contato_cliente or not str(contato_cliente).strip():
-        return (
-            "Para proteger os dados do cliente, solicite o e-mail ou telefone "
-            "associado ao pedido antes de consultá-lo."
-        )
-
-    matching_orders = orders_df[
-        orders_df["order_id"].astype(str).eq(str(order_id))
-    ]
-    if matching_orders.empty:
-        return "Não foi possível confirmar o pedido com os dados informados."
-
-    order = matching_orders.iloc[0]
-    customers = customers_df[
-        customers_df["customer_id"].astype(str).eq(str(order["customer_id"]))
-    ]
-    if customers.empty:
-        return "Não foi possível confirmar o pedido com os dados informados."
-
-    contact = str(contato_cliente).strip()
-    customer = customers.iloc[0]
-    email_matches = (
-        "@" in contact
-        and _normalize_text(contact) == _normalize_text(customer.get("email", ""))
+    order, error = _get_verified_order(
+        order_id, contato_cliente, orders_df, customers_df
     )
-    phone_matches = (
-        "@" not in contact
-        and re.sub(r"\D", "", contact)
-        == re.sub(r"\D", "", str(customer.get("phone", "")))
-    )
-    if not (email_matches or phone_matches):
-        return "Não foi possível confirmar o pedido com os dados informados."
+    if error:
+        return error
 
     total = pd.to_numeric(pd.Series([order.get("total_brl")]), errors="coerce").iloc[0]
     summary = [
@@ -314,6 +451,16 @@ def executar_ferramenta(
             orders_df,
             customers_df,
         )
+    if name == "verificar_prazo_devolucao":
+        order, error = _get_verified_order(
+            tool_input.get("order_id", ""),
+            tool_input.get("contato_cliente", ""),
+            orders_df,
+            customers_df,
+        )
+        if error:
+            return error
+        return avaliar_prazo_devolucao(order)
     if name == "consultar_politicas":
         return get_policy_context(tool_input.get("tema", ""))
     raise ValueError(f"Ferramenta desconhecida solicitada pelo modelo: {name}")
