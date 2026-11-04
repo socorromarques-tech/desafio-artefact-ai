@@ -103,21 +103,55 @@ Anthropic API.
 
 ## Technical decisions
 
-- **Pandas for structured queries:** products, prices, categories, stock, orders,
-  and promotions are tabular data. Direct filters are simpler to verify than asking
-  the LLM to calculate these values.
-- **Anthropic tool use for routing:** the model selects the appropriate tool instead
-  of treating every number in a question as an order ID.
-- **Page- and keyword-based policy retrieval:** the PDF has eight pages. The
-  implementation normalizes accents to score terms and aliases, returns up to three
-  relevant pages, and preserves the original text in tool output. Given the current
-  document size, this avoids introducing a vector-search infrastructure.
-- **Return-window calculation in Python:** dates and limits are compared in code,
-  not estimated by the LLM. If the data does not support a conclusion, the agent
-  explains what is missing rather than declaring the order eligible or ineligible.
-- **No conversation persistence:** history stays in process memory, which is enough
-  for a terminal demo and avoids storing customer conversations unnecessarily in
-  this prototype.
+The choices below address the challenge criteria and favor a small, testable
+prototype over additional infrastructure:
+
+### Agent framework and approach
+
+The agent uses Anthropic tool use (function calling) to route a customer request to
+one of a small set of Python functions for catalog search, order lookup, return
+window checks, and policy retrieval. This is a hybrid approach: the LLM interprets
+the request and writes the response, while deterministic code handles structured
+filters and date calculations. Policy lookup uses lightweight, page- and
+keyword-based retrieval rather than vector RAG: the source manual is only eight
+pages, so a vector database would add operational complexity without a clear benefit
+for this prototype. The retrieval normalizes accents, scores terms and aliases,
+returns up to three relevant pages, and preserves the original policy text.
+
+### Model and provider
+
+The application uses the Anthropic Messages API and a configurable Claude model
+(`MODEL_NAME`). Anthropic tool use provides the structured routing required by the
+agent, while keeping the model identifier configurable lets the application use a
+model enabled for the evaluator's account. A valid API key and model access are
+required for live conversations; automated tests do not depend on either.
+
+### Interaction interface
+
+The interface is a command-line application. A CLI keeps setup and operation simple
+and lets the challenge focus on whether the agent can select tools and answer from
+the supplied data, without spending time on a separate frontend. A web or graphical
+interface would be a possible follow-up, not a requirement for this prototype.
+
+### Conversation history and persistence
+
+Conversation messages, tool calls, and tool results are retained in process memory
+for the current session so the model can use recent context. They are not written to
+a file or database: persistence is not necessary for a terminal demonstration and
+would introduce additional handling of potentially sensitive customer information.
+History is lost when the process exits.
+
+### Data treatment
+
+Pandas loads the six supplied CSV files for products, categories, promotions,
+orders, order items, and customers. Explicit Python filters handle category, price,
+and stock rather than asking the LLM to calculate tabular results. Search
+normalizes accents for Portuguese text, and currency values are presented in BRL.
+The policy PDF is extracted with `pypdf`; its page text is cached for the process
+lifetime and selected by keyword and alias relevance. The return-window check uses
+Python date comparisons and requires an actual receipt date and online purchase
+channel; an estimated delivery date is not treated as proof. Missing or conflicting
+source data is reported as a limitation rather than silently inferred.
 
 ## Policies and data
 
