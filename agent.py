@@ -475,15 +475,17 @@ def generate_llm_response(
     customers_df,
     categories_df,
     promotions_df,
+    conversation_history=None,
 ):
-    """Deixa o modelo selecionar e executar ferramentas antes de responder."""
+    """Responde usando ferramentas e, opcionalmente, o histórico da sessão."""
     if client is None:
         return (
             "O agente está sem conexão com a API e não pode selecionar ferramentas. "
             "Configure ANTHROPIC_API_KEY para consultar produtos, pedidos e políticas."
         )
 
-    messages = [{"role": "user", "content": user_query}]
+    messages = list(conversation_history or [])
+    messages.append({"role": "user", "content": user_query})
     for _ in range(MAX_TOOL_TURNS):
         try:
             response = client.messages.create(
@@ -509,6 +511,11 @@ def generate_llm_response(
 
         if not tool_calls:
             if text_blocks:
+                messages.append(
+                    {"role": "assistant", "content": response.content}
+                )
+                if conversation_history is not None:
+                    conversation_history[:] = messages
                 return "\n".join(text_blocks)
             return "A API não retornou uma resposta em texto."
 
@@ -550,6 +557,7 @@ def run_interactive_agent(
     print("Exemplos: 'violões até R$ 1.000' ou 'qual é a política de devolução?'")
     print("Digite 'sair' para encerrar.")
 
+    conversation_history = []
     while True:
         try:
             user_query = input("\nCliente: ").strip()
@@ -568,6 +576,7 @@ def run_interactive_agent(
                 customers,
                 categories,
                 promotions,
+                conversation_history,
             )
             print(f"\nEmpório da Música: {response}")
         except KeyboardInterrupt:
